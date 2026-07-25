@@ -172,7 +172,15 @@ fn disassemble_bytes(
     archv: Architecture,
     endian: Endianness,
 ) -> Result<Vec<Insn>, String> {
-    let cs = build_capstone(archv, endian).map_err(|e| e.to_string())?;
+    let mut cs = build_capstone(archv, endian).map_err(|e| e.to_string())?;
+
+    // Real .text sections interleave code with constant pools and, on PIC/MIPS,
+    // GP-relative data words that are not valid instructions. Without skipdata,
+    // capstone stops dead at the first such word (e.g. a MIPS opcode 0x3f),
+    // which is why a healthy section can decode to only a handful of lines.
+    // Enabling it makes capstone emit a `.byte` pseudo-op for undecodable bytes
+    // and keep going, so the whole range is disassembled.
+    let _ = cs.set_skipdata(true);
 
     let insns = cs
         .disasm_all(code, base_addr)
