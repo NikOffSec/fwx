@@ -7,26 +7,19 @@ use std::path::Path;
 
 const EXTRACT_DIR: &str = "./extracted";
 
-// Guard rails for the recursive walk. Firmware images can nest deeply and a
-// filesystem extraction (e.g. squashfs) can drop thousands of files; cap both
-// so a single [e] press can't spin forever or flood the UI.
 const MAX_DEPTH: usize = 8;
 const MAX_NODES: usize = 2000;
 
-/// Where a node's bytes live, so it can be read back for disassembly.
 #[derive(Clone)]
 pub enum ByteSource {
-    /// The original firmware, already held in memory by the UI.
     Firmware,
-    /// A file on disk (a carved/extracted file), read on demand.
     File(String),
 }
 
-/// One node in the nested-contents tree. A node is either a file binwalk carved
-/// out (`is_file`, whole-file bytes) or a signature it detected inside some
-/// container (a byte range within `source`). Either way it can be disassembled.
+/// A node is either a file binwalk carved out (`is_file`, whole-file bytes) or
+/// a signature it detected inside some container (a byte range within `source`)
 pub struct FileNode {
-    /// Signature name or carved-file name shown to the user.
+    /// Signature name or carved-file name shown to the user
     pub label: String,
     /// Offset of the bytes within `source`.
     pub offset: usize,
@@ -38,8 +31,6 @@ pub struct FileNode {
     pub children: Vec<FileNode>,
 }
 
-/// Top-level, in-memory signature scan. Cheap (no disk writes), used to give an
-/// immediate picture of the outermost container before the user extracts.
 pub fn scan(firmware: &[u8]) -> Option<Vec<SignatureResult>> {
     let binwalker = Binwalk::new();
     let findings = binwalker.scan(firmware);
@@ -49,17 +40,7 @@ pub fn scan(firmware: &[u8]) -> Option<Vec<SignatureResult>> {
     Some(findings)
 }
 
-/// Recursively extract the firmware, mirroring binwalk's `--matryoshka` (`-M`)
-/// behaviour, which the library does not expose directly: analyze a file, carve
-/// out each extraction's output, then re-analyze those carved files, and so on.
-///
-/// Returns the nested contents as a tree: every signature found at every level
-/// becomes a node, and files binwalk carves out become nodes whose children are
-/// whatever is found inside them.
 pub fn extract_recursive(filepath: String) -> Result<Vec<FileNode>> {
-    // Binwalk happily writes into an existing directory, silently merging with
-    // whatever a previous run left behind. Refuse up front so an earlier
-    // extraction can't be clobbered without the user knowing.
     if Path::new(EXTRACT_DIR).exists() {
         bail!(
             "output directory `{EXTRACT_DIR}` already exists; \
@@ -77,8 +58,6 @@ pub fn extract_recursive(filepath: String) -> Result<Vec<FileNode>> {
     )
     .map_err(|e| anyhow::anyhow!("failed to configure binwalk: {e:?}"))?;
 
-    // The root is the firmware itself; its detected signatures reference the
-    // in-memory firmware bytes rather than a file on disk.
     let mut node_count = 0;
     let nodes = analyze_into_nodes(
         &binwalker,
@@ -169,8 +148,6 @@ fn analyze_into_nodes(
     nodes
 }
 
-/// The distinct on-disk files uncovered by the recursion, in first-seen order.
-/// These are the carved files the strings view mines for text.
 pub fn extracted_file_paths(tree: &[FileNode]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut paths = Vec::new();
@@ -192,6 +169,8 @@ fn collect_file_paths(
         collect_file_paths(&node.children, seen, paths);
     }
 }
+
+// THE TESTS (thanks claude)
 
 #[cfg(test)]
 mod tests {
