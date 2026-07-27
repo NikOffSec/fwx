@@ -923,7 +923,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fwx_tool"
+name = "fwx"
 version = "0.1.0"
 dependencies = [
  "anyhow",
