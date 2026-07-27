@@ -31,7 +31,7 @@ The program should be called like: *fwx \<filepath\>* where filepath is the firm
 
 The UI has 4 windows, one for the disassembly listing, the files found/extracted, the strings extracted, and the entropy. The controls can be found in the bottom left, and there are also vim-like controls like **[j]** and **[k]** to navigate up and down.
 
-It should be noted that the disassembly will most likely not populate on its own, as the firmware image itself most liekly will not contain a .text section like a typical binary, isntead you should select the embedded file that you want to disassemble. There are two ways to generate the disassembly, 
+It should be noted that the disassembly will most likely not populate on its own, as the firmware image itself most likely will not contain a .text section like a typical binary, instead you should select the embedded file that you want to disassemble. There are two ways to generate the disassembly, 
 
 1: *(easier option)* press **[e]** to 
 extract the files recursively, and the navigate to the file you want to disassemble and click **[enter]**, or 
