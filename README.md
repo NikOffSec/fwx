@@ -9,6 +9,9 @@
 </pre>
 
 &nbsp;
+[![crates.io](https://img.shields.io/crates/v/fwx.svg)](https://crates.io/crates/fwx)
+[![downloads](https://img.shields.io/crates/d/fwx.svg)](https://crates.io/crates/fwx)
+[![license](https://img.shields.io/crates/l/fwx.svg)](./LICENSE)
 
 # A firmware analysis TUI for reverse engineers.
 
