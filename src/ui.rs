@@ -19,11 +19,8 @@ use crate::{disassemble, extract, metadata};
 
 const ENTROPY_BLOCK_SIZE: usize = 1024;
 
-/// Controls line shown in the 2x2 grid view, listing every global key.
-const DEFAULT_STATUS: &str =
-    "[Tab] pane   [Space] full   [↑/↓] scroll   [PgUp/PgDn] page   [/] search   [e] extract   [Enter] disasm   [m] meta   [q] quit";
+const DEFAULT_STATUS: &str = "[Tab] pane   [Space] full   [↑/↓] scroll   [PgUp/PgDn] page   [/] search   [e] extract   [Enter] disasm   [m] meta   [q] quit";
 
-/// Labels for the manual-metadata form, in tab order.
 const DISASM_FIELDS: [&str; 4] = [
     "Architecture",
     "Endianness",
@@ -39,9 +36,6 @@ enum Pane {
     Entropy,
 }
 
-/// One flattened row of the nested-contents tree: the display text (with its
-/// tree-branch prefix already baked in) plus everything needed to fetch the
-/// node's bytes for disassembly.
 struct FlatRow {
     text: String,
     label: String,
@@ -50,30 +44,21 @@ struct FlatRow {
     size: usize,
 }
 
-/// A string found while scanning, with where it came from.
 struct StringHit {
     text: String,
-    /// Offset within its source.
     offset: u64,
-    /// Whether it matched the important-keyword list.
     important: bool,
     /// The extracted file it was pulled from; `None` for the original firmware.
     source: Option<String>,
 }
 
-/// Cap on strings kept after a recursive extraction, so mining a large
-/// decompressed image can't blow up memory or the list widget.
 const MAX_STRINGS: usize = 20_000;
 
-/// The search bar while the user is typing a query (vim-style `/`).
 struct SearchInput {
-    /// Pane the search applies to (only Disasm or Strings).
     pane: Pane,
     query: String,
 }
 
-/// A committed search: the row indices in `pane`'s list that matched, and which
-/// one is currently selected. `j`/`k` step `current` through `matches`.
 struct Search {
     pane: Pane,
     query: String,
@@ -81,8 +66,6 @@ struct Search {
     current: usize,
 }
 
-/// State of the manual-metadata entry form shown in the disassembly pane when
-/// automatic detection fails.
 struct DisasmForm {
     values: [String; 4],
     active: usize,
@@ -92,8 +75,7 @@ struct DisasmForm {
 impl DisasmForm {
     fn new() -> Self {
         Self {
-            // Base address and offset default to 0, which is the right guess for
-            // a raw firmware blob loaded at the start of memory.
+            // Base address and offset default to 0
             values: [
                 String::new(),
                 String::new(),
@@ -107,47 +89,36 @@ impl DisasmForm {
 }
 
 pub struct App {
-    // Inputs kept around so extraction can run on demand.
     filepath: String,
     firmware: Vec<u8>,
 
-    // Precomputed analysis results.
     disasm: Vec<disassemble::Insn>,
     disasm_err: Option<String>,
-    // The bytes currently loaded into the disassembly pane. `None` means the
-    // original firmware; `Some((name, bytes))` is a file the user selected from
-    // the recursive extraction results.
+
     disasm_source: Option<(String, Vec<u8>)>,
     findings: Option<Vec<SignatureResult>>,
-    // Nested contents uncovered by recursive extraction, flattened into
-    // display-ready tree rows. Populated on [e]; once present, the Files pane
-    // shows this tree instead of the top-level signatures.
+
     file_rows: Vec<FlatRow>,
     strings: Vec<StringHit>,
     strings_err: Option<String>,
     entropy: Vec<(usize, f64)>,
 
-    // UI state.
     status: String,
     focus: Pane,
-    // When true, only the focused pane is drawn, filling the whole grid.
+
     fullscreen: bool,
     disasm_state: TableState,
     files_state: ListState,
     strings_state: ListState,
-    // When Some, the disassembly pane is in manual-metadata entry mode and
-    // captures keystrokes for the form.
+
     disasm_input: Option<DisasmForm>,
-    // When Some, the search bar is open and captures keystrokes for the query.
+
     search_input: Option<SearchInput>,
-    // The most recent committed search; while set for the focused pane, j/k
-    // step through its matches instead of scrolling.
+
     search: Option<Search>,
     should_quit: bool,
 }
 
-/// Entry point called from main(): sets up the terminal, runs the loop,
-/// and restores the terminal afterwards.
 pub fn run(firmware: Vec<u8>, filepath: String) -> Result<()> {
     let terminal = ratatui::init();
     let app = App::new(firmware, filepath);
@@ -158,15 +129,12 @@ pub fn run(firmware: Vec<u8>, filepath: String) -> Result<()> {
 
 impl App {
     fn new(firmware: Vec<u8>, filepath: String) -> Self {
-        // Run every analysis once, up front.
         let (disasm, disasm_err) = match disassemble::disassembler(&firmware) {
             Ok(d) => (d, None),
             Err(e) => (Vec::new(), Some(e)),
         };
         let findings = extract::scan(&firmware);
-        // Initial view: strings from the raw firmware (source = None). Once the
-        // user extracts, these are replaced with strings mined from every file
-        // the recursion uncovers.
+
         let (strings, strings_err) = match metadata::extract_strings(&firmware) {
             Ok(s) => (
                 metadata::prioritize_strings(s)
@@ -184,7 +152,6 @@ impl App {
         };
         let entropy = metadata::entropy_scan(&firmware, ENTROPY_BLOCK_SIZE);
 
-        // Seed selections so the highlight has somewhere to sit.
         let mut disasm_state = TableState::default();
         if !disasm.is_empty() {
             disasm_state.select(Some(0));
@@ -230,29 +197,23 @@ impl App {
         Ok(())
     }
 
-    // ---- events -----------------------------------------------------------
-
     fn handle_events(&mut self) -> Result<()> {
         if let Event::Key(key) = event::read()? {
-            // On Windows a key generates both Press and Release events; ignore
-            // everything that isn't a press so actions don't fire twice.
             if key.kind != KeyEventKind::Press {
                 return Ok(());
             }
-            // While the manual-metadata form is open it owns the keyboard, so
-            // typing "q", "j", etc. edits fields instead of driving the UI.
+
             if self.disasm_input.is_some() {
                 self.handle_form_key(key.code);
                 return Ok(());
             }
-            // Likewise the search bar captures every keystroke while open.
+
             if self.search_input.is_some() {
                 self.handle_search_key(key.code);
                 return Ok(());
             }
             match key.code {
                 KeyCode::Char('q') => self.should_quit = true,
-                // Esc clears an active search first; only quits if there's none.
                 KeyCode::Esc => {
                     if self.search.is_some() {
                         self.clear_search();
@@ -263,8 +224,6 @@ impl App {
                 KeyCode::Tab => self.cycle_focus(),
                 KeyCode::Char(' ') => self.toggle_fullscreen(),
                 KeyCode::Char('/') => self.open_search(),
-                // Arrows always scroll; j/k cycle search matches when a search
-                // is active for the focused pane, otherwise they scroll too.
                 KeyCode::Down => self.scroll(1),
                 KeyCode::Up => self.scroll(-1),
                 KeyCode::Char('j') => self.search_or_scroll(1),
@@ -287,22 +246,17 @@ impl App {
             Pane::Strings => Pane::Entropy,
             Pane::Entropy => Pane::Disasm,
         };
-        // In fullscreen the controls list is pane-specific, so refresh it as the
-        // focused (and thus fullscreened) pane changes.
+
         if self.fullscreen {
             self.status = self.controls();
         }
     }
 
-    /// Toggle between the 2x2 grid and a single-pane fullscreen view of the
-    /// focused pane, updating the controls line to match.
     fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
         self.status = self.controls();
     }
 
-    /// The controls line for the current view: the full list in grid mode, or
-    /// only the keys relevant to the focused pane when fullscreened.
     fn controls(&self) -> String {
         if !self.fullscreen {
             return DEFAULT_STATUS.to_string();
@@ -320,14 +274,10 @@ impl App {
         }
     }
 
-    // ---- search -----------------------------------------------------------
-
-    /// True if `pane` holds a searchable list.
     fn is_searchable(pane: Pane) -> bool {
         matches!(pane, Pane::Disasm | Pane::Strings)
     }
 
-    /// Open the vim-style search bar for the focused pane, if it is searchable.
     fn open_search(&mut self) {
         if !Self::is_searchable(self.focus) {
             self.status = "Search works in the Disassembly and Strings panes.".to_string();
@@ -340,8 +290,6 @@ impl App {
         self.status = self.search_input_status();
     }
 
-    /// Route a keystroke to the open search bar: edit the query, or submit /
-    /// cancel it.
     fn handle_search_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
@@ -365,8 +313,6 @@ impl App {
         }
     }
 
-    /// Run the typed query against the pane's list and, if anything matches,
-    /// jump to the first hit at or after the current selection.
     fn commit_search(&mut self) {
         let Some(input) = self.search_input.take() else {
             return;
@@ -384,7 +330,6 @@ impl App {
             return;
         }
 
-        // Start at the first match at or after where the cursor already sits.
         let sel = self.selection(input.pane).unwrap_or(0);
         let current = matches.iter().position(|&m| m >= sel).unwrap_or(0);
         let target = matches[current];
@@ -399,9 +344,6 @@ impl App {
         self.status = self.match_status();
     }
 
-    /// Row indices in `pane`'s list whose contents contain `query`
-    /// (case-insensitive). Addresses/offsets are matched in padded, bare-hex,
-    /// and `0x`-prefixed forms so any of the ways a user might type them work.
     fn find_matches(&self, pane: Pane, query: &str) -> Vec<usize> {
         let needle = query.to_lowercase();
         match pane {
@@ -431,8 +373,6 @@ impl App {
         }
     }
 
-    /// Step through the active search's matches (dir +1 = next, -1 = prev),
-    /// wrapping around.
     fn cycle_match(&mut self, dir: isize) {
         let Some(search) = self.search.as_mut() else {
             return;
@@ -447,8 +387,6 @@ impl App {
         self.status = self.match_status();
     }
 
-    /// j/k either cycle matches (when a search is active for the focused pane)
-    /// or fall back to scrolling.
     fn search_or_scroll(&mut self, dir: isize) {
         let active = self
             .search
@@ -461,22 +399,17 @@ impl App {
         }
     }
 
-    /// Drop the active search and restore the normal controls line.
     fn clear_search(&mut self) {
         self.search = None;
         self.status = self.controls();
     }
 
-    /// Drop the active search if it targets `pane`, whose list just changed
-    /// underneath it (so its match indices are stale). Leaves the status line
-    /// alone — the caller sets its own message.
     fn discard_search_for(&mut self, pane: Pane) {
         if self.search.as_ref().is_some_and(|s| s.pane == pane) {
             self.search = None;
         }
     }
 
-    /// Current selection index for a searchable pane.
     fn selection(&self, pane: Pane) -> Option<usize> {
         match pane {
             Pane::Disasm => self.disasm_state.selected(),
@@ -485,7 +418,6 @@ impl App {
         }
     }
 
-    /// Move a searchable pane's selection to `idx`.
     fn select(&mut self, pane: Pane, idx: usize) {
         match pane {
             Pane::Disasm => self.disasm_state.select(Some(idx)),
@@ -494,7 +426,6 @@ impl App {
         }
     }
 
-    /// Status line shown while typing a query.
     fn search_input_status(&self) -> String {
         match &self.search_input {
             Some(input) => format!("/{}_   [Enter] search  [Esc] cancel", input.query),
@@ -502,8 +433,6 @@ impl App {
         }
     }
 
-    /// Status line shown once a search is active, with match position and the
-    /// keys to move between hits.
     fn match_status(&self) -> String {
         match &self.search {
             Some(s) => format!(
@@ -557,9 +486,6 @@ impl App {
                 self.file_rows = rows;
                 self.files_state.select(Some(0));
 
-                // Re-mine strings from every file the recursion uncovered; the
-                // raw firmware is mostly compressed, so its strings are useless
-                // compared to those in the decompressed contents.
                 self.reload_strings_from_extractions(&tree);
 
                 self.focus = Pane::Files;
@@ -572,15 +498,9 @@ impl App {
         }
     }
 
-    /// Replace the Strings pane contents with strings pulled from each file the
-    /// recursion carved out, tagged with their source file and with important
-    /// keywords floated to the top.
     fn reload_strings_from_extractions(&mut self, tree: &[extract::FileNode]) {
         let mut hits: Vec<StringHit> = Vec::new();
 
-        // Gather up to a generous safety bound so a pathological image can't
-        // exhaust memory, but well above the display cap so important strings
-        // aren't dropped by file position before we get a chance to sort.
         const COLLECT_CAP: usize = MAX_STRINGS * 10;
 
         'outer: for path in extract::extracted_file_paths(tree) {
@@ -603,9 +523,6 @@ impl App {
             }
         }
 
-        // Float important strings to the top; stable, so within each group the
-        // per-file offset order is preserved. Truncate for display *after*
-        // sorting so the important hits always make the cut.
         hits.sort_by(|a, b| b.important.cmp(&a.important));
         hits.truncate(MAX_STRINGS);
 
@@ -615,14 +532,10 @@ impl App {
         if !self.strings.is_empty() {
             self.strings_state.select(Some(0));
         }
-        // The old match indices no longer line up with this list.
+
         self.discard_search_for(Pane::Strings);
     }
 
-    /// Load the bytes of the selected tree node into the disassembly pane and
-    /// attempt automatic disassembly. A carved file loads whole; an in-place
-    /// signature loads the byte range it occupies within its container. Manual
-    /// metadata ([m]) then operates on those same bytes.
     fn disasm_selected_file(&mut self) {
         if self.focus != Pane::Files {
             self.status = "Focus the Files pane (Tab) and extract ([e]) first.".to_string();
@@ -633,11 +546,14 @@ impl App {
             return;
         }
 
-        let Some(row) = self.files_state.selected().and_then(|i| self.file_rows.get(i)) else {
+        let Some(row) = self
+            .files_state
+            .selected()
+            .and_then(|i| self.file_rows.get(i))
+        else {
             return;
         };
-        // Copy out what we need so the immutable borrow of `self` ends before we
-        // start mutating the pane state below.
+
         let (source, offset, size, label) =
             (row.source.clone(), row.offset, row.size, row.label.clone());
 
@@ -688,13 +604,13 @@ impl App {
         self.status = if self.disasm.is_empty() {
             format!("Loaded {name} — auto-disasm failed; press [m] to enter metadata manually.")
         } else {
-            format!("Disassembled {name} — {} instruction(s).", self.disasm.len())
+            format!(
+                "Disassembled {name} — {} instruction(s).",
+                self.disasm.len()
+            )
         };
     }
 
-    // ---- manual disassembly metadata --------------------------------------
-
-    /// Open the manual-metadata form (only meaningful from the disasm pane).
     fn open_disasm_form(&mut self) {
         if self.focus != Pane::Disasm {
             self.status = "Focus the Disassembly pane (Tab) before entering metadata.".to_string();
@@ -706,8 +622,6 @@ impl App {
                 .to_string();
     }
 
-    /// Route a keystroke to the open form: edit fields, move between them, or
-    /// submit / cancel.
     fn handle_form_key(&mut self, code: KeyCode) {
         match code {
             KeyCode::Esc => {
@@ -736,9 +650,6 @@ impl App {
         }
     }
 
-    /// Validate the form and, if it parses, run the disassembler with the
-    /// user-supplied metadata. A parse error stays in the form; a disassembly
-    /// error closes the form and is surfaced so the user can retry with [m].
     fn submit_disasm_form(&mut self) {
         let Some(form) = self.disasm_input.as_ref() else {
             return;
@@ -754,9 +665,6 @@ impl App {
             }
         };
 
-        // Run against the currently-loaded source: a selected extracted file if
-        // one is loaded, otherwise the original firmware. The borrow ends with
-        // the call, so mutating `self` afterwards is fine.
         let data: &[u8] = match &self.disasm_source {
             Some((_, bytes)) => bytes,
             None => &self.firmware,
@@ -782,8 +690,6 @@ impl App {
         }
     }
 
-    /// Turn the raw form strings into a `ManualMeta`, reporting the first bad
-    /// field as an error string.
     fn parse_form(form: &DisasmForm) -> Result<disassemble::ManualMeta, String> {
         let arch = disassemble::parse_arch(&form.values[0])
             .ok_or_else(|| format!("unknown architecture: '{}'", form.values[0].trim()))?;
@@ -803,8 +709,6 @@ impl App {
             offset,
         })
     }
-
-    // ---- rendering --------------------------------------------------------
 
     fn render(&mut self, frame: &mut Frame) {
         // Reserve one line at the bottom for status/help, grid takes the rest.
@@ -832,26 +736,12 @@ impl App {
             self.render_pane(frame, Pane::Entropy, bottom_right);
         }
 
-        // ---- center logo overlay (render later, once art exists) ----------
-        // Widgets drawn later paint over earlier ones, so this sits on top of
-        // the grid. Clear wipes the cells underneath first.
-        //
-        // let logo_area = centered_rect(body, 24, 8);
-        // frame.render_widget(ratatui::widgets::Clear, logo_area);
-        // frame.render_widget(
-        //     Paragraph::new("FWX")
-        //         .alignment(ratatui::layout::Alignment::Center)
-        //         .block(Block::bordered().title("Logo")),
-        //     logo_area,
-        // );
-
         frame.render_widget(
             Paragraph::new(self.status.as_str()).style(Style::new().fg(Color::DarkGray)),
             status_area,
         );
     }
 
-    /// A bordered block whose border lights up when its pane has focus.
     fn pane_block(&self, title: &str, pane: Pane) -> Block<'static> {
         let mut block = Block::bordered().title(title.to_string());
         if self.focus == pane {
@@ -860,8 +750,6 @@ impl App {
         block
     }
 
-    /// Draw a single pane into `area`. Used both for the grid cells and, in
-    /// fullscreen, for the lone focused pane.
     fn render_pane(&mut self, frame: &mut Frame, pane: Pane, area: Rect) {
         match pane {
             Pane::Disasm => self.render_disasm(frame, area),
@@ -878,7 +766,6 @@ impl App {
         };
         let block = self.pane_block(&title, Pane::Disasm);
 
-        // Manual-metadata form takes over the pane while it is open.
         if let Some(form) = &self.disasm_input {
             let inner = block.inner(area);
             frame.render_widget(block, area);
@@ -943,8 +830,6 @@ impl App {
     }
 
     fn render_files(&mut self, frame: &mut Frame, area: Rect) {
-        // After a recursive extraction, the pane shows the nested-contents tree
-        // that the user can disassemble. Before that, the top-level signatures.
         if !self.file_rows.is_empty() {
             let title = format!(
                 "Nested Contents  ({} items · [Enter] to disassemble)",
@@ -998,8 +883,6 @@ impl App {
 
     fn render_strings(&mut self, frame: &mut Frame, area: Rect) {
         let important_count = self.strings.iter().filter(|h| h.important).count();
-        // After extraction the strings carry a source file; note that in the
-        // title so it's clear they no longer come from the raw firmware.
         let from_extractions = self.strings.iter().any(|h| h.source.is_some());
         let scope = if from_extractions {
             "Strings (extracted files)"
@@ -1066,16 +949,12 @@ impl App {
             return;
         }
 
-        // Paint the border first, then split the interior into an info line and
-        // the chart area below it.
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let [info_area, chart_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
 
-        // Spell out how one entropy block relates to the whole file so the bar
-        // widths mean something: block size, total size, and each block's share.
         let file_size = self.firmware.len();
         let block_pct = if file_size > 0 {
             ENTROPY_BLOCK_SIZE as f64 / file_size as f64 * 100.0
@@ -1094,7 +973,6 @@ impl App {
             info_area,
         );
 
-        // Fit the number of bars to the available inner width.
         let bar_width = 6u16;
         let bar_gap = 1u16;
         let n_bars = ((chart_area.width + bar_gap) / (bar_width + bar_gap)).max(1) as usize;
@@ -1109,10 +987,6 @@ impl App {
     }
 }
 
-// ---- helpers --------------------------------------------------------------
-
-/// Move a selection index by `delta`, clamped to [0, len-1]. Returns None for
-/// an empty list.
 fn step(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
     if len == 0 {
         return None;
@@ -1122,8 +996,6 @@ fn step(current: Option<usize>, delta: isize, len: usize) -> Option<usize> {
     Some(next)
 }
 
-/// Build the lines for the manual-metadata form: a header, one row per field
-/// (the active one marked and highlighted), input hints, and any parse error.
 fn disasm_form_lines(form: &DisasmForm) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
@@ -1177,8 +1049,6 @@ fn disasm_form_lines(form: &DisasmForm) -> Vec<Line<'static>> {
     lines
 }
 
-/// Flatten the nested-contents tree into display rows, drawing the tree with
-/// `├─`/`└─`/`│` connectors so the nesting is visible in the flat list widget.
 fn flatten_tree(nodes: &[extract::FileNode], prefix: &str, out: &mut Vec<FlatRow>) {
     let count = nodes.len();
     for (i, node) in nodes.iter().enumerate() {
@@ -1198,15 +1068,11 @@ fn flatten_tree(nodes: &[extract::FileNode], prefix: &str, out: &mut Vec<FlatRow
             size: node.size,
         });
 
-        // Children indent under this node; the vertical bar continues only while
-        // this node has following siblings.
         let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
         flatten_tree(&node.children, &child_prefix, out);
     }
 }
 
-/// End index for a node's byte range: `offset + size`, or the container length
-/// when the size is unknown (0) or would run past the end.
 fn clamp_end(offset: usize, size: usize, container_len: usize) -> usize {
     if size == 0 {
         container_len
@@ -1215,7 +1081,7 @@ fn clamp_end(offset: usize, size: usize, container_len: usize) -> usize {
     }
 }
 
-/// Human-readable byte count (B / KiB / MiB) for the entropy info line.
+// human readable size
 fn human_size(bytes: usize) -> String {
     const KIB: usize = 1024;
     const MIB: usize = 1024 * 1024;
@@ -1228,8 +1094,6 @@ fn human_size(bytes: usize) -> String {
     }
 }
 
-/// Aggregate the (offset, entropy) blocks into at most `n_bars` averaged bars,
-/// coloured by entropy level (red = likely compressed/encrypted, blue = low).
 fn downsample_entropy(entropy: &[(usize, f64)], n_bars: usize) -> Vec<Bar<'static>> {
     if entropy.is_empty() || n_bars == 0 {
         return Vec::new();
@@ -1255,17 +1119,4 @@ fn downsample_entropy(entropy: &[(usize, f64)], n_bars: usize) -> Vec<Bar<'stati
                 .style(Style::new().fg(color))
         })
         .collect()
-}
-
-/// Centered sub-rect for the (future) logo overlay.
-#[allow(dead_code)]
-fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width: width.min(area.width),
-        height: height.min(area.height),
-    }
 }

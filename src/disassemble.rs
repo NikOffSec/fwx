@@ -13,8 +13,6 @@ pub struct ManualMeta {
     pub offset: usize,
 }
 
-/// Parse an architecture keyword into an `object::Architecture`. Accepts the
-/// common aliases a user is likely to type.
 pub fn parse_arch(s: &str) -> Option<Architecture> {
     match s.trim().to_ascii_lowercase().as_str() {
         "x86_64" | "x64" | "amd64" => Some(Architecture::X86_64),
@@ -30,7 +28,6 @@ pub fn parse_arch(s: &str) -> Option<Architecture> {
     }
 }
 
-/// Parse an endianness keyword into an `object::Endianness`.
 pub fn parse_endian(s: &str) -> Option<Endianness> {
     match s.trim().to_ascii_lowercase().as_str() {
         "little" | "le" | "l" => Some(Endianness::Little),
@@ -39,10 +36,12 @@ pub fn parse_endian(s: &str) -> Option<Endianness> {
     }
 }
 
-/// Parse a hex number, with or without a `0x` prefix.
 pub fn parse_hex(s: &str) -> Option<u64> {
     let t = s.trim();
-    let t = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
+    let t = t
+        .strip_prefix("0x")
+        .or_else(|| t.strip_prefix("0X"))
+        .unwrap_or(t);
     if t.is_empty() {
         return None;
     }
@@ -136,10 +135,6 @@ fn build_capstone(archv: Architecture, endian: Endianness) -> Result<Capstone, &
     cs.map_err(|_| "failed to initialize capstone")
 }
 
-/// Attempt automatic disassembly by parsing the file as an object and pulling
-/// its `.text` section, architecture, and endianness from the headers. Returns
-/// a human-readable error on any of the several ways this can fail, so the
-/// caller can fall back to manual metadata entry.
 pub fn disassembler(firmware: &[u8]) -> Result<Vec<Insn>, String> {
     let (base_bytes, base_addr) = text_section(firmware)
         .ok_or("could not locate a .text section / base address (not a recognized object file)")?;
@@ -150,8 +145,6 @@ pub fn disassembler(firmware: &[u8]) -> Result<Vec<Insn>, String> {
     disassemble_bytes(&base_bytes, base_addr, archv, end)
 }
 
-/// Disassemble using metadata the user entered by hand. Slices the firmware at
-/// the supplied offset and hands the rest to capstone.
 pub fn disassemble_manual(firmware: &[u8], meta: &ManualMeta) -> Result<Vec<Insn>, String> {
     let code = firmware
         .get(meta.offset..)
@@ -164,8 +157,6 @@ pub fn disassemble_manual(firmware: &[u8], meta: &ManualMeta) -> Result<Vec<Insn
     disassemble_bytes(code, meta.base_addr, meta.arch, meta.endian)
 }
 
-/// Shared back end: build the capstone engine for the arch/endianness and
-/// decode `code` starting at `base_addr`.
 fn disassemble_bytes(
     code: &[u8],
     base_addr: u64,
@@ -174,12 +165,7 @@ fn disassemble_bytes(
 ) -> Result<Vec<Insn>, String> {
     let mut cs = build_capstone(archv, endian).map_err(|e| e.to_string())?;
 
-    // Real .text sections interleave code with constant pools and, on PIC/MIPS,
-    // GP-relative data words that are not valid instructions. Without skipdata,
-    // capstone stops dead at the first such word (e.g. a MIPS opcode 0x3f),
-    // which is why a healthy section can decode to only a handful of lines.
-    // Enabling it makes capstone emit a `.byte` pseudo-op for undecodable bytes
-    // and keep going, so the whole range is disassembled.
+    // continue disassembly past data sections (before it would just end)
     let _ = cs.set_skipdata(true);
 
     let insns = cs

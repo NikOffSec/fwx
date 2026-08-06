@@ -70,10 +70,7 @@ pub fn extract_recursive(filepath: String) -> Result<Vec<FileNode>> {
     Ok(nodes)
 }
 
-/// Analyze one file and turn its findings into tree nodes. Each detected
-/// signature becomes a node (its bytes live in `source` at the reported
-/// offset); if binwalk managed to carve files out of that signature, those
-/// files become child nodes and are analyzed in turn.
+// binwalk lib does not expose recursive flag like CLI tool in the Rust crate, so we build recursion ourselves
 fn analyze_into_nodes(
     binwalker: &Binwalk,
     target: &str,
@@ -85,13 +82,11 @@ fn analyze_into_nodes(
         return Vec::new();
     }
 
-    // Scan and extract this one file (a single level; recursion is ours).
     let results = binwalker.analyze(&target.to_string(), true);
 
     let mut nodes = Vec::new();
 
-    // `file_map` is already sorted by offset. Each entry is one thing binwalk
-    // found inside `target`.
+    // `file_map` is already sorted by offset.
     for signature in &results.file_map {
         if *node_count >= MAX_NODES {
             break;
@@ -106,8 +101,6 @@ fn analyze_into_nodes(
             children: Vec::new(),
         };
 
-        // If this signature was successfully extracted into one or more files,
-        // hang those files off it and dig into each.
         if let Some(extraction) = results.extractions.get(&signature.id)
             && extraction.success
         {
